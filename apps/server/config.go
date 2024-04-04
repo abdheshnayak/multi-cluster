@@ -39,6 +39,10 @@ type Config struct {
 	InternalPeers []common.Peer `json:"internal_peers,omitempty"`
 }
 
+func (s *Config) String() string {
+	return fmt.Sprintf("%#v", *s)
+}
+
 func (s *Config) load(cPath string) error {
 
 	if _, err := os.Stat(cPath); err != nil {
@@ -77,10 +81,10 @@ func (s Config) getAllAllowedIPs() []string {
 
 func getIp(publicKey string) (string, int, error) {
 	if s, ok := peerMap[publicKey]; ok {
-		return s.IpAddress, 0, nil
+		return s.IpAddress, s.IpId, nil
 	}
 
-	for i := 100; i < 3000; i++ {
+	for i := constants.AgentIpRangeMin; i < constants.AgentIpRangeMax; i++ {
 		if ipMap[i] == "" {
 			ipMap[i] = publicKey
 			b, err := wg.GetRemoteDeviceIp(int64(i))
@@ -148,7 +152,7 @@ func (s *Config) cleanPeers() {
 			delete(ipMap, v.IpId)
 
 			for i, p := range s.InternalPeers {
-				if p.IpAddress == k {
+				if p.PublicKey == k {
 					s.InternalPeers = append(s.InternalPeers[:i], s.InternalPeers[i+1:]...)
 					return
 				}

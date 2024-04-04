@@ -20,25 +20,27 @@ type client struct {
 	env    *env.Env
 	logger logging.Logger
 
+	client     wg.Client
 	privateKey []byte
 	publicKey  []byte
-	// IpAddress  string
 }
+
+var prevConf string
 
 func (c *client) start() error {
 	for {
 		if err := c.reconcile(); err != nil {
 			c.logger.Error(err)
-			wait()
+			time.Sleep(time.Second * 5)
 			continue
 		}
-		wait()
+		common.ReconWait()
 	}
 }
 
 func (c *client) reconcile() error {
-	c.logger.Infof("reconciling start")
-	defer c.logger.Infof("reconcilation end")
+	// c.logger.Infof("reconciling start")
+	// defer c.logger.Infof("reconcilation end")
 
 	b, err := c.sendPing()
 	if err != nil {
@@ -68,12 +70,22 @@ func (c *client) reconcile() error {
 		},
 	}
 
+	curr := config.String()
+	if prevConf == curr {
+		// c.logger.Infof("no change in config")
+		return nil
+	}
+
+	prevConf = curr
+
 	wgConfg, err := config.toConfigBytes()
 	if err != nil {
 		return err
 	}
 
-	wg.ResyncWg(c.logger, wgConfg)
+	if err := c.client.Sync(wgConfg); err != nil {
+		return err
+	}
 
 	return nil
 }

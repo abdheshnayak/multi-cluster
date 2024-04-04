@@ -3,69 +3,76 @@ package server
 import (
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/kloudlite/operator/apps/multi-cluster/apps/common"
 	"github.com/kloudlite/operator/apps/multi-cluster/apps/server/env"
-	"github.com/kloudlite/operator/apps/multi-cluster/constants"
 	"github.com/kloudlite/operator/apps/multi-cluster/mpkg/wg"
 	"github.com/kloudlite/operator/pkg/logging"
 )
 
 type server struct {
+	client wg.Client
 	logger logging.Logger
 	app    *fiber.App
 	env    *env.Env
-}
-
-func (s *server) initFunc() error {
-	if err := config.load(s.env.ConfigPath); err != nil {
-		return err
-	}
-
-	b, err := config.toConfigBytes()
-	if err != nil {
-		return err
-	}
-
-	if err := wg.ResyncWg(s.logger, b); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 var (
 	mu sync.Mutex
 )
 
-func (s *server) Start() error {
+var prevConf string
 
-	if err := s.initFunc(); err != nil {
+func (s *server) sync() error {
+	config.cleanPeers()
+
+	var curr = config.String()
+	if prevConf == curr {
+		// s.logger.Infof("no change in config")
+		return nil
+	}
+
+	// s.logger.Infof("config changed: %s vs %s", curr, prevConf)
+
+	prevConf = config.String()
+
+	b, err := config.toConfigBytes()
+	if err != nil {
 		return err
 	}
 
-	go func() {
-		for {
-			config.cleanPeers()
+	if err := s.client.Sync(b); err != nil {
+		return err
+	}
 
-			b, err := config.toConfigBytes()
-			if err != nil {
-				s.logger.Error(err)
-				continue
-			}
+	return nil
+}
 
-			wg.ResyncWg(s.logger, b)
-			time.Sleep(constants.ReconDuration * time.Second)
-		}
-	}()
+func (s *server) Start() error {
+	if err := config.load(s.env.ConfigPath); err != nil {
+		return err
+	}
+
+	// go func() {
+	// 	defer s.client.Stop()
+	//
+	// 	for {
+	// 		if err := s.sync(); err != nil {
+	// 			s.logger.Error(err)
+	// 		}
+	// 		common.ReconWait()
+	// 	}
+	// }()
 
 	notFound := func(c *fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusNotFound)
 	}
 
 	s.app.Post("/peer", func(c *fiber.Ctx) error {
+		mu.Lock()
+		defer mu.Unlock()
+
 		var p common.PeerReq
 		if err := p.ParseJson(c.Body()); err != nil {
 			return c.SendStatus(fiber.StatusBadRequest)
@@ -89,6 +96,10 @@ func (s *server) Start() error {
 
 		b, err := presp.ToJson()
 		if err != nil {
+			return c.SendStatus(fiber.StatusInternalServerError)
+		}
+
+		if err := s.sync(); err != nil {
 			return c.SendStatus(fiber.StatusInternalServerError)
 		}
 
